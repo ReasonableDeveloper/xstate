@@ -361,6 +361,89 @@ describe('communicating with spawned actors', () => {
     parentService.start();
   });
 
+  it('should be able to send events from a deeply spawned actor to its hierarchical parent', (done) => {
+    const childMachine = Machine({
+      initial: 'inactive',
+      states: {
+        inactive: {
+          on: { ACTIVATE: 'active' }
+        },
+        active: {
+          entry: [
+            // actually called
+            () => void console.log('Entry of childMachine called'),
+            sendParent('AWAKE')
+          ]
+        }
+      }
+    });
+
+    /**
+     * Doesn't spawn the childMachine itself. This is done by the grand parent.
+     */
+    const parentMachine = Machine<any>({
+      initial: 'inactive',
+      context: {
+        childRef: undefined as any
+      },
+      states: {
+        inactive: {
+          on: {
+            ACTIVATE: {
+              actions: send('ACTIVATE', {
+                to: (context) => context.childRef
+              })
+            },
+            // not called :(
+            AWAKE: 'active'
+          }
+        },
+        active: {
+          entry: respond('EXISTING.DONE')
+        }
+      }
+    });
+
+    const grandParentMachine = Machine<any>({
+      initial: 'pending',
+      context: {
+        parentRef: undefined as any
+      },
+      states: {
+        pending: {
+          entry: assign({
+            parentRef: () =>
+              spawn(
+                parentMachine.withContext({
+                  childRef: spawn(childMachine)
+                })
+              )
+          }),
+          on: {
+            'EXISTING.DONE': 'success'
+            // Comment this in to see the test passing. sendParent of the child
+            // sends events straight to the grandParentMachine.
+            // AWAKE: 'success'
+          },
+          after: {
+            100: {
+              actions: send('ACTIVATE', { to: (ctx) => ctx.parentRef })
+            }
+          }
+        },
+        success: {
+          type: 'final'
+        }
+      }
+    });
+
+    const grandParentService = interpret(grandParentMachine).onDone(() => {
+      done();
+    });
+
+    grandParentService.start();
+  });
+
   it('should be able to communicate with arbitrary actors if sessionId is known', (done) => {
     const existingMachine = Machine({
       initial: 'inactive',
